@@ -3,6 +3,9 @@ Professional proof-of-concept demonstrating Windows Defender exploitation techni
 
 Based on public vulnerability research by [Nightmare-Eclipse](https://github.com/Nightmare-Eclipse/BlueHammer).
 
+### Note from ATroubledSnake
+I changed a lot of the stuff we were not aware a member of ours added using AI. We are terribly sorry for the absolute slop state that this was uploaded in before, and we hope you forgive us ;P
+
 ## Overview
 
 The SNEK Blue War Hammer is a research tool that examines Windows Defender update mechanisms and their interaction with system file access controls. The implementation demonstrates advanced Windows API programming patterns including RPC communication, COM interfaces, VSS manipulation, and kernel level file system operations.
