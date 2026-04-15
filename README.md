@@ -168,7 +168,7 @@ Command line options:
 - `--check-updates`: Check for Defender signature updates only
 - `--download-only`: Download and extract updates without full exploitation
 - `--trigger-vss-only`: Execute VSS trigger phase without full workflow
-- `--disable-spawn`: Prevent shell execution after artifact extraction
+- `--no-spawn`: Prevent shell execution after artifact extraction
 - `--log-steps`: Display detailed operational progress
 
 ## Security Considerations
